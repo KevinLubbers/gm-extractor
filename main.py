@@ -71,8 +71,7 @@ def run():
         page.click("#login-button")
 
         #click on Build button and wait for popup
-        page.wait_for_selector(".framework-header-selector-button")
-        page.click(".framework-header-selector-button")
+        page.locator(".framework-header-selector-button").first.click()
         page.wait_for_selector(".component-selector-model-input")
 
         #loop through hard-coded division list. no need to scrape all divisions
@@ -140,55 +139,76 @@ def run():
                             row_data = [x.replace("$", "").replace(",", "") for x in row_data]
                             #order of query is (year, division, model, model_code, option_code, option_name, option_category, invoice_price, msrp_price )
                             full_model_name = model + " " + row_data[1]
-                            #added [2:] to remove the first 2 digits of the model code for Hyundai(PCS has a limit of 10)
-                            model_code = row_data[0][2:]
+                            model_code = row_data[0]
                             option_name = None
+                            #end *MDL and DFRT
+                            #start enter model options
+                            row.click()
+                            time.sleep(3)
+                            #START NEW GM CPOS SELECTION LOGIC
+
+                            select_buttons = page.locator(
+                                "tr.peg-headerRow3 th.peg-pegButton div"
+                            ).filter(has_text="Select")
+
+                            count = select_buttons.count()
+
+                            print(f"Found {count} Select buttons")
+
+                            for j in range(count):
+                                button = select_buttons.nth(j)
+
+                                print(f"Button #{j + 1}")
+                                print("Text:", button.inner_text())
+
+                                button.click()
+                                time.sleep(3)
+                                #add an enter key press maybe to account for random compatibility pop ups? shouldn't cause any issue if no pop up
+                                #end dynamic menu selection, starting data extraction
+                                option_table = page.query_selector_all("tr.subheader, tr.dataRow")
+                                current_header = ""
+                                try:
+                                    page.locator("div.button-up >> text=OK").click(timeout=1000)
+                                except:
+                                    pass
+                                for option in option_table:
+                                    is_subheader = option.evaluate("el => el.classList.contains('subheader')")
+                                    is_data = option.evaluate("el => el.classList.contains('dataRow')")
+                                    #extract text from header and translate to a PCS category IF row is a header
+                                    if is_subheader:
+                                        current_header = header_to_category(option.inner_text().strip()) 
+                                    elif is_data:
+                                        cells = option.query_selector_all("td")
+                                        row_data = [cell.inner_text().strip() for cell in cells]
+                                        row_data = [x.replace("$", "").replace(",", "") for x in row_data]
+                                        #order of query is (year, division, model, model_code, option_code, option_name, option_category, invoice_price, msrp_price )
+                                        row_data[2] = row_data[2].split('\n')[0].rstrip()
+                                        row_data[2] = (
+                                            row_data[2][:-1].rstrip()
+                                            if row_data[2].rstrip().count('(') < row_data[2].rstrip().count(')')
+                                            else row_data[2].rstrip()
+                                        )
+                                        row_data[2] = row_data[2].replace('  ', ' ').replace('(PIO)', '(Port Installed)')
+                                        insert_tuple = (year, division, full_model_name, model_code, row_data[1], row_data[2], current_header, safe_float(row_data[4]), safe_float(row_data[5]))
+                                        print(insert_tuple)
+                                        data.append(insert_tuple)
+                                #wait 25 seconds per model before moving to the next then reopen the dynamic menu and start the loop over again
+                                time.sleep(25)
+                                page.click(".framework-header-selector-button")
+                                time.sleep(3)
+                                if j < count - 1:
+                                    inner_table = page.query_selector("table.style-cellTableWidget tbody")
+                                    inner_rows = inner_table.query_selector_all("tr")
+                                    inner_row = inner_rows[i]
+                                    inner_row.click()
+                                    time.sleep(1)
+                            '''
                             insert_tuple = (year, division, full_model_name, model_code, "*MDL", option_name, None, safe_float(row_data[2]), safe_float(row_data[3]))
                             data.append(insert_tuple)
                             insert_tuple = (year, division, full_model_name, model_code, "DFRT", option_name, None, safe_float(row_data[4]), safe_float(row_data[4]))
                             data.append(insert_tuple)
-                            #end *MDL and DFRT
-                            #start enter model options
-                            row.click()
-                            time.sleep(1)
-                            page.wait_for_selector('#select-new-vehicle-button')
-                            page.click('#select-new-vehicle-button')
-                            time.sleep(3)
-                            #add an enter key press maybe to account for random compatibility pop ups? shouldn't cause any issue if no pop up
-                            #end dynamic menu selection, starting data extraction
-                            option_table = page.query_selector_all("tr.subheader, tr.dataRow")
-                            current_header = ""
-                            try:
-                                page.locator("div.button-up >> text=OK").click(timeout=1000)
-                            except:
-                                pass
-                            for option in option_table:
-                                is_subheader = option.evaluate("el => el.classList.contains('subheader')")
-                                is_data = option.evaluate("el => el.classList.contains('dataRow')")
-                                #extract text from header and translate to a PCS category IF row is a header
-                                if is_subheader:
-                                    current_header = header_to_category(option.inner_text().strip()) 
-                                elif is_data:
-                                    cells = option.query_selector_all("td")
-                                    row_data = [cell.inner_text().strip() for cell in cells]
-                                    row_data = [x.replace("$", "").replace(",", "") for x in row_data]
-                                    #order of query is (year, division, model, model_code, option_code, option_name, option_category, invoice_price, msrp_price )
-                                    row_data[2] = row_data[2].split('\n')[0].rstrip()
-                                    row_data[2] = (
-                                        row_data[2][:-1].rstrip()
-                                        if row_data[2].rstrip().count('(') < row_data[2].rstrip().count(')')
-                                        else row_data[2].rstrip()
-                                    )
-                                    row_data[2] = row_data[2].replace('  ', ' ').replace('(PIO)', '(Port Installed)')
-                                    insert_tuple = (year, division, full_model_name, model_code, row_data[1], row_data[2], current_header, safe_float(row_data[4]), safe_float(row_data[5]))
-                                    print(insert_tuple)
-                                    data.append(insert_tuple)
-                            #wait 25 seconds per model before moving to the next then reopen the dynamic menu and start the loop over again
-                            time.sleep(25)
-                            page.click(".framework-header-selector-button")
-                            time.sleep(3)
-
-                
+                            '''
+                            #END NEW GM LOGIC - sleep is for ui to close
                     time.sleep(2)
 
         #insert data into database
