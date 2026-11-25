@@ -129,6 +129,7 @@ def run():
                                 data.append(insert_tuple)
                     #otherwise, select all rows
                     else:
+                        #start Model loop
                         for i in range(len(rows)):
                             table = page.query_selector("table.style-cellTableWidget tbody")
                             rows = table.query_selector_all("tr")
@@ -141,12 +142,33 @@ def run():
                             full_model_name = model + " " + row_data[1]
                             model_code = row_data[0]
                             option_name = None
+                            #used to determine the value of each CPOS
+                            model_invoice = safe_float(row_data[2])
+                            model_msrp = safe_float(row_data[3])
+                            model_dfrt = safe_float(row_data[4])
+                            insert_tuple = (year, division, full_model_name, model_code, "*MDL", option_name, None, model_invoice, model_msrp)
+                            data.append(insert_tuple)
+                            insert_tuple = (year, division, full_model_name, model_code, "DFRT", option_name, None, model_dfrt, model_dfrt)
+                            data.append(insert_tuple)
                             #end *MDL and DFRT
+                            #used to detect and prevent duplicates from being added
+                            seen_options = set()
                             #start enter model options
                             row.click()
                             time.sleep(3)
+                            #need to add a check for the dynamic table popping up
                             #START NEW GM CPOS SELECTION LOGIC
+                            def get_rows(row_name):
+                                row = page.locator("tr").filter(has=page.locator(".peg-priceTitle", has_text=row_name))
+                                return row.locator(".peg-priceValue").all_text_contents()
+                            def get_CPOS_rows(row_name):
+                                row = page.locator("tr").filter(has=page.locator(".peg-pegTitle", has_text=row_name))
+                                return row.locator(".peg-pegValue").all_text_contents()
 
+                            cpos_option_codes = get_CPOS_rows("Preferred Equipment Group")
+                            cpos_option_names = get_CPOS_rows("Trim Level")
+                            cpos_prices = get_rows("Base Model")
+                            cpos_prices = [safe_float(x.replace("$", "").replace(",", "")) for x in cpos_prices]
                             select_buttons = page.locator(
                                 "tr.peg-headerRow3 th.peg-pegButton div"
                             ).filter(has_text="Select")
@@ -155,8 +177,22 @@ def run():
 
                             print(f"Found {count} Select buttons")
 
+                            #start CPOS loop - One Model has Many CPOS
                             for j in range(count):
+                                #adding CPOS option code with price before going to option list screen
+                                adjusted_msrp = cpos_prices[j] - model_msrp
+                                adjusted_invoice_rate = model_invoice / model_msrp
+                                adjusted_invoice = adjusted_msrp * adjusted_invoice_rate
+                                insert_tuple = (year, division, full_model_name, model_code, cpos_option_codes[j], cpos_option_names[j], "EQUIP", adjusted_invoice, adjusted_msrp)
+                                data.append(insert_tuple)
+
+                                #using a tuple of (option, invoice, msrp) to keep track of seen options
+                                #here we are adding the CPOS option so it's not grabbed when going thru the main list
+                                seen_options.add((cpos_option_codes[j], 0, 0))
+
                                 button = select_buttons.nth(j)
+                                print(adjusted_invoice)
+                                print(adjusted_msrp)
 
                                 print(f"Button #{j + 1}")
                                 print("Text:", button.inner_text())
@@ -189,32 +225,34 @@ def run():
                                             else row_data[2].rstrip()
                                         )
                                         row_data[2] = row_data[2].replace('  ', ' ').replace('(PIO)', '(Port Installed)')
-                                        insert_tuple = (year, division, full_model_name, model_code, row_data[1], row_data[2], current_header, safe_float(row_data[4]), safe_float(row_data[5]))
-                                        print(insert_tuple)
-                                        data.append(insert_tuple)
+                                        #checking if this option has been added to this model already
+                                        if (row_data[1], safe_float(row_data[4]), safe_float(row_data[5])) not in seen_options:
+                                            #if new option, add it to seen_options and add the whole option to our data list
+                                            seen_options.add((row_data[1], safe_float(row_data[4]), safe_float(row_data[5])))
+                                            insert_tuple = (year, division, full_model_name, model_code, row_data[1], row_data[2], current_header, safe_float(row_data[4]), safe_float(row_data[5]))
+                                            print(insert_tuple)
+                                            data.append(insert_tuple)
                                 #wait 25 seconds per model before moving to the next then reopen the dynamic menu and start the loop over again
                                 time.sleep(25)
                                 page.click(".framework-header-selector-button")
                                 time.sleep(3)
+                                #reselect last row if there are more CPOS to select
                                 if j < count - 1:
                                     inner_table = page.query_selector("table.style-cellTableWidget tbody")
                                     inner_rows = inner_table.query_selector_all("tr")
                                     inner_row = inner_rows[i]
                                     inner_row.click()
                                     time.sleep(1)
-                            '''
-                            insert_tuple = (year, division, full_model_name, model_code, "*MDL", option_name, None, safe_float(row_data[2]), safe_float(row_data[3]))
-                            data.append(insert_tuple)
-                            insert_tuple = (year, division, full_model_name, model_code, "DFRT", option_name, None, safe_float(row_data[4]), safe_float(row_data[4]))
-                            data.append(insert_tuple)
-                            '''
+                                #end CPOS loop
                             #END NEW GM LOGIC - sleep is for ui to close
+                        #end Model loop
                     time.sleep(2)
 
         #insert data into database
         c.executemany(sql, data)
 
         conn.commit()
+        c.close()
         conn.close()
         #close pop up
         page.click("img.gwt-Image[src*='close_window.gif']")
